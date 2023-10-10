@@ -1,0 +1,90 @@
+
+forward function sample(support: list of integer, prob: list of real): integer
+
+declarations
+	SAMPLE_LT: dynamic array(ORDER_ITEMS, SUP, PERIODS, SAMPLE_SCENARIOS) of integer
+	LT_SUPPORT: list of integer
+	LT_PROB: list of real
+	
+	LT_DIST: array(LT_RANGE) of real
+	
+	tmp_lt: integer
+end-declarations
+
+if(IF_GEN_SCEN=0) then
+	!Reuse scenarios
+	initializations from PLAN_DIR + "/SAMPLE_SCEN_NUM_SCEN="+NUM_SCENARIOS+".txt"
+		SAMPLE_LT
+	end-initializations
+	
+elif(IF_GEN_SCEN=1) then
+	!Random sampling for each lead time distribution
+	forall(s in 1..NUM_SCENARIOS) do
+		forall(i in ORDER_ITEMS) do
+			forall(u in SUP|exists(OC(i,u))) do
+				forall(t in PERIODS) do				
+					forall(lt in LT_RANGE|exists(PROB(i,u,t,lt))) do
+						LT_SUPPORT+=[lt]
+						LT_PROB +=[PROB(i,u,t,lt)]
+					end-do					
+					SAMPLE_LT(i,u,t,s):= sample(LT_SUPPORT, LT_PROB)	
+					!_writeline([string(i), string(u), string(t), string(s), string(SAMPLE_LT(i,u,t,s))], 5)
+					
+					LT_SUPPORT:=[]
+					LT_PROB:=[]
+				end-do !t
+			end-do !u
+		end-do !i
+	end-do !s 
+	
+	!Save scenarios for possible reuse by using run-time option: IF_GEN_SCEN=0
+	initializations to PLAN_DIR + "/SAMPLE_SCEN_NUM_SCEN="+NUM_SCENARIOS+".txt"
+		SAMPLE_LT
+	end-initializations
+		
+else
+	writeln(">>> ERROR: error for invalid value for IF_GEN_SCEN:", IF_GEN_SCEN)
+	_abnormal_engine_status("OD01_EngineStatus")
+	exit(0)
+end-if
+
+finalize(SAMPLE_SCENARIOS)	
+
+!Sampling from discrete probability distribution
+function sample(support: list of integer, prob: list of real): integer
+	declarations
+		n: integer		
+	end-declarations
+
+	n:= getsize(support)
+
+	if(n<>getsize(prob)) then
+		writeln(">>> ERROR: The size of the 'support' and 'prob' should be the same, but the size of 'support' is ", getsize(support), ", while that of 'prob' is ", getsize(prob), ".")
+		_abnormal_engine_status("OD01_EngineStatus")
+		exit(0)
+	end-if
+
+	declarations
+		r: real	
+		cum_prob: array(1..n) of real
+		scaled_prob: list of real
+	end-declarations
+
+	if(sum(i in 1..getsize(prob)) prob(i)<>1) then
+		writeln(">>> WARNING: The elements of 'prob' should be summed up to 1, but the sum is ", sum(i in 1..getsize(prob)) prob(i),".")	
+		forall(p in 1..getsize(prob)) do
+			scaled_prob+= [prob(p)/(sum(i in 1..getsize(prob)) prob(i))]
+		end-do
+		returned:= sample(support, scaled_prob)
+	else
+		cum_prob(1):= prob(1)		
+		forall(i in 2..n) cum_prob(i) := prob(i)+cum_prob(i-1)	
+		r:= random		!random sample from uniform dist. from 0 to 1
+		forall(j in 1..getsize(support)) do
+			if(r <= cum_prob(j)) then
+				returned:= support(j)
+				break;
+			end-if			
+		end-do !j
+	end-if
+end-function

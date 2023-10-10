@@ -1,0 +1,298 @@
+
+writeln(">> Initializing Data....")
+
+declarations
+	!IN00_EngineControl.csv	
+	MAX_TIME: integer
+	TLNC : real
+	MIP_GAP : real
+end-declarations
+
+!! Reading IN00_EngineControl.csv	
+_filename := "IN00_EngineControl"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(j in 1..3) do 
+	_value(j) := getdata(_filename, 1, j)
+end-do	
+
+MAX_TIME:= integer(_value(1))
+TLNC:= real(_value(2))
+MIP_GAP:= real(_value(3))
+
+declarations
+	!IN01_PlanInfo.csv
+	HORIZON: integer		!Planning horizon
+	IF_GEN_SCEN : integer	!0: use the previously generated instance / 1: random generation
+	NUM_SCENARIOS : integer		
+end-declarations
+
+!! Reading IN01_PlanInfo.csv	
+_filename := "IN01_PlanInfo"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(j in 1..6) do 
+	_value(j) := getdata(_filename, 1, j)
+end-do	
+
+HORIZON:= integer(_value(1))
+IF_GEN_SCEN:= integer(_value(2))
+NUM_SCENARIOS:= integer(_value(3))
+
+declarations	
+	
+	PERIODS = 1..HORIZON
+
+	!IN02_Product.csv	
+	ITEM_NAME: array(ITEMS) of string	
+	HC, BC, EC: array(ITEMS) of real
+	PC, PROD_CAPA: array(PRODUCE_ITEMS) of real
+	PT: array(PRODUCE_ITEMS) of integer
+	MIN_NUM_SUP, MAX_NUM_SUP: array(ORDER_ITEMS) of integer
+	
+	!IN03_Bom.csv
+	REQ: dynamic array(ITEMS, ITEMS) of integer			
+	
+	!IN04_Supplier.csv
+	SUP_NAME: array(SUP) of string
+	MIN_ORDER_QTY, MAX_ORDER_QTY: dynamic array(ORDER_ITEMS, SUP) of real
+	OC: dynamic array(ORDER_ITEMS, SUP) of real
+	FC: dynamic array(ORDER_ITEMS, SUP) of real
+	MIN_CTRCT_DUR: dynamic array(ORDER_ITEMS, SUP) of integer
+	MAX_CTRCT_DUR: dynamic array(ORDER_ITEMS, SUP) of integer
+	
+	!IN05_AvailPeriods.csv
+	AVAIL_PERIODS: dynamic array(ORDER_ITEMS, SUP) of set of integer
+	
+	!IN06_SupplierLeadTime.csv
+	LT_RANGE: set of integer
+	PROB: dynamic array(ORDER_ITEMS, SUP, PERIODS, LT_RANGE) of real
+	
+	!IN07_Demand.csv
+	DEM: array(END_ITEMS, PERIODS) of real
+	
+	!IN08_InitialProductInfo.csv
+	INIT_INV: array(ITEMS) of real
+	INIT_BACKLOG: array(END_ITEMS) of real
+	
+	!IN09_InitialSupplierInfo.csv
+	INIT_CTRCT_DUR: dynamic array(ORDER_ITEMS, SUP) of integer
+end-declarations
+
+!! Reading IN02_Product.csv
+_filename := "IN02_Product"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..12) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	ITEMS += {_value(1)}
+	ITEM_NAME(_value(1)) := _value(2)
+	HC(_value(1)) := real(_value(3))
+	BC(_value(1)) := real(_value(4))
+	EC(_value(1)) := real(_value(5))
+	
+	if _value(11) = "N" then
+		PRODUCE_ITEMS += {_value(1)}
+		PC(_value(1)) := real(_value(6))
+		PROD_CAPA(_value(1)) := real(_value(7))
+		PT(_value(1)) := integer(_value(8))
+	elif _value(11) = "Y" then
+		ORDER_ITEMS += {_value(1)}
+		MIN_NUM_SUP(_value(1)):= integer(_value(9))
+		MAX_NUM_SUP(_value(1)):= integer(_value(10))		
+	else	
+		writeln(">>> ERROR: error for invalid value for the field 'IS_ORDER':", _value(11))
+		exit(0)					
+	end-if
+	if _value(12) = "Y" then
+		END_ITEMS += {_value(1)}
+	end-if
+end-do
+
+finalize(ORDER_ITEMS)
+finalize(PRODUCE_ITEMS)
+finalize(END_ITEMS)
+COMPONENTS := ITEMS - END_ITEMS
+finalize(COMPONENTS)
+
+!! Reading IN03_Bom.csv
+_filename := "IN03_Bom"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..6) do
+		_value(j) := getdata(_filename, i, j)
+	end-do
+	REQ(_value(2), _value(4)) := integer(_value(6))
+end-do
+
+!! Reading IN04_Supplier.csv
+_filename := "IN04_Supplier"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..10) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	SUP += {_value(1)}
+	SUP_NAME(_value(1)) := _value(2)
+	MIN_ORDER_QTY(_value(3), _value(1)) := real(_value(4))
+	MAX_ORDER_QTY(_value(3), _value(1)) := real(_value(5))
+	OC(_value(3), _value(1)) := real(_value(6))
+	FC(_value(3), _value(1)) := real(_value(7))
+	!AVAIL_PERIODS(_value(3), _value(1)) += {integer(_value(8))}
+	MIN_CTRCT_DUR(_value(3), _value(1)) := integer(_value(9))
+	MAX_CTRCT_DUR(_value(3), _value(1)) := integer(_value(10))
+end-do
+
+!! Reading IN05_AvailPeriods.csv
+_filename := "IN05_AvailPeriods"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..3) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	AVAIL_PERIODS(_value(2), _value(1)) += {integer(_value(3))}
+end-do
+
+!! Reading IN06_SupplierLeadTime.csv
+_filename := "IN06_SupplierLeadTime"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..5) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	PROB(_value(2), _value(1), integer(_value(3)), integer(_value(4))) := real(_value(5))
+end-do
+
+!! Reading IN07_Demand.csv
+_filename := "IN07_Demand"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..4) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	DEM(_value(1), integer(_value(3))) := real(_value(4))
+end-do
+
+!! Reading IN08_InitialProductInfo.csv
+_filename := "IN08_InitialProductInfo"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..3) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	INIT_INV(_value(1)) := real(_value(2))
+	if(_value(1) in END_ITEMS) then
+		INIT_BACKLOG(_value(1)) := real(_value(3))
+	end-if
+end-do
+
+!! Reading IN09_InitialSupplierInfo.csv
+_filename := "IN09_InitialSupplierInfo"
+if isread(_filename) = false then
+	readfile(_filename)
+	setreadon(_filename)
+end-if
+_line := getdataline(_filename)
+if _line=0 then 
+	writeln(">>> ERROR: error while reading:", _filename)
+	_abnormal_engine_status("OD01_Engine_Status")
+	exit(0)
+end-if
+
+forall(i in 1.._line) do
+	forall(j in 1..3) do 
+		_value(j) := getdata(_filename, i, j)
+	end-do	
+	INIT_CTRCT_DUR(_value(2), _value(1)) := integer(_value(3))
+end-do
+
+writeln(">>> Initializing Data Done.")

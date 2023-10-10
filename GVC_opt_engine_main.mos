@@ -1,0 +1,211 @@
+
+! 230419. Dynamic Supplier Selection & Supplier Porfolio Setting + Refactoring according to the input schema
+! 230925. For deployment as an optimization engine + Scenario generation option
+
+model GVC_opt_engine
+	uses "mmxprs","mmsystem","random","deploy"
+	options noimplicit		
+
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	!!!!!! COMMENTIZE THESE LINES FOR DEPLOYMENT !!!!!		
+	
+	parameters		
+		PLAN_DIR = "./data"	
+		OUTPUT_DIR = "./results"
+	end-parameters	
+	
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	!!!!!! DECOMMENT THESE LINES FOR DEPLOYMENT !!!!!!
+	(!
+	!Run-time arguments
+	declarations
+		PLAN_DIR, OUTPUT_DIR: string
+	end-declarations
+	
+	if argc = 1 then
+		PLAN_DIR:= argv(2)
+		OUTPUT_DIR:= argv(2)
+	elif argc = 2 then
+		PLAN_DIR:= argv(2)
+		OUTPUT_DIR:= argv(3)
+	end-if		
+	!)
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	!Sets
+	declarations								
+		SUP: set of string			!contains SUP_ID	
+		
+		ITEMS: set of string		!contains ITEM_ID
+		COMPONENTS: set of string
+		END_ITEMS: set of string
+		LEAF_ITEMS: set of string
+		PRODUCE_ITEMS, ORDER_ITEMS: set of string	
+		
+		SAMPLE_SCENARIOS: set of integer
+	end-declarations	
+	
+	include "GVC_opt_engine_common.mos"	
+	
+	! before the engine starts, write OD01_EngineStatus.csv file for UI module
+	_init_engine_status("OD01_EngineStatus")
+	
+	include "GVC_opt_engine_dataread.mos"		
+	include "GVC_opt_engine_scen_gen.mos"
+	
+	declarations
+		SAMPLE_PROB: array(SAMPLE_SCENARIOS) of real
+	end-declarations
+	
+	forall(s in SAMPLE_SCENARIOS) do
+		SAMPLE_PROB(s):= 1/getsize(SAMPLE_SCENARIOS)
+	end-do
+	
+	writeln(">> Initializing optimization model ....")
+	
+	!Decision Variables
+	declarations
+		ctrct: dynamic array(ORDER_ITEMS, PERIODS, SUP) of mpvar
+		avail : dynamic array(ORDER_ITEMS, PERIODS, SUP) of mpvar
+		order:	dynamic array(ORDER_ITEMS, PERIODS, SUP) of mpvar
+		produce: array(PRODUCE_ITEMS, PERIODS, SAMPLE_SCENARIOS) of mpvar
+		inv:	array(ITEMS, PERIODS, SAMPLE_SCENARIOS) of mpvar
+		backlog:array(END_ITEMS, PERIODS, SAMPLE_SCENARIOS) of mpvar
+	end-declarations
+	
+	!Objective & Constraints
+	declarations
+		ExpTotCost: linctr	!objective
+		MinNumSup, MaxNumSup:	array(ORDER_ITEMS) of linctr
+		
+		InavailOrder: array(ORDER_ITEMS, PERIODS, SUP) of linctr
+		MinCtrct, MaxCtrct: 	array(ORDER_ITEMS, PERIODS, SUP) of linctr
+		MinOrderQty, MaxOrderQty:	array(ORDER_ITEMS, PERIODS, SUP) of linctr
+		
+		EItemInvBal: array(END_ITEMS, PERIODS, SAMPLE_SCENARIOS) of linctr
+		CompInvBal: array(COMPONENTS, PERIODS, SAMPLE_SCENARIOS) of linctr	
+		ProdCapa: array(PRODUCE_ITEMS, PERIODS, SAMPLE_SCENARIOS) of linctr
+		InitInv: array(ITEMS, SAMPLE_SCENARIOS) of linctr
+		InitBacklog: array(END_ITEMS, SAMPLE_SCENARIOS) of linctr
+	end-declarations
+
+	forall(s in SAMPLE_SCENARIOS) do
+		forall(t in PERIODS) do			
+			!END ITEM
+			forall(i in END_ITEMS) do					
+				produce(i,t,s) is_integer											
+				inv(i,t,s) is_integer
+				backlog(i,t,s) is_integer				
+				
+				!End item inventory balance				
+				EItemInvBal(i,t,s):= if(t<>1, inv(i,t-1,s)-backlog(i,t-1,s), INIT_INV(i)-INIT_BACKLOG(i)) + if(t>PT(i), produce(i,t-PT(i),s), 0) - 
+				DEM(i,t) = inv(i,t,s) - backlog(i,t,s)
+					
+				!Production capacity									
+				ProdCapa(i,t,s):= produce(i,t,s) <= PROD_CAPA(i)				
+					
+				ExpTotCost+= SAMPLE_PROB(s)*HC(i)*inv(i,t,s)
+				ExpTotCost+= SAMPLE_PROB(s)*PC(i)*produce(i,t,s)				
+				ExpTotCost+= SAMPLE_PROB(s)*if(t<>HORIZON, BC(i), EC(i))*backlog(i,t,s)
+			end-do !i in END_ITEMS
+			
+			!COMPONENTS
+			forall(i in COMPONENTS) do
+				!ORDER ITEMS
+				if(i in ORDER_ITEMS) then			
+					inv(i,t,s) is_integer		
+					
+					forall(u in SUP|exists(OC(i,u))) do	
+						create(ctrct(i,t,u))
+						create(avail(i,t,u))
+						create(order(i,t,u))
+								
+						ctrct(i,t,u) is_binary		
+						avail(i,t,u) is_binary								
+						order(i,t,u) is_integer						
+							
+						!Order-available periods
+						if(t not in AVAIL_PERIODS(i,u)) then 	
+							InavailOrder(i,t,u):= avail(i,t,u) = 0												
+						end-if
+					
+						!Minimum/maximum contraction periods
+						if(t<=MIN_CTRCT_DUR(i,u)-INIT_CTRCT_DUR(i,u)) then
+							MinCtrct(i,t,u):= avail(i,t,u) = 1
+						elif(MIN_CTRCT_DUR(i,u)>=1) then
+							MinCtrct(i,t,u):= avail(i,t,u) >= sum(tau in maxlist(1, t-MIN_CTRCT_DUR(i,u)+1)..t) ctrct(i,tau,u)
+						end-if
+						
+						if(t>MAX_CTRCT_DUR(i,u)-INIT_CTRCT_DUR(i,u)) then
+							MaxCtrct(i,t,u):= sum(tau in maxlist(1, t-MAX_CTRCT_DUR(i,u)+1)..t) ctrct(i,tau,u) >= avail(i,t,u)				
+						end-if									
+						
+						!Minimum/maximum order quantity	
+						MinOrderQty(i,t,u):= order(i,t,u) >= MIN_ORDER_QTY(i,u) * avail(i,t,u)
+						MaxOrderQty(i,t,u):= order(i,t,u) <= MAX_ORDER_QTY(i,u) * avail(i,t,u)															
+					end-do !u																							
+					
+					!Order item inventory balance				
+					CompInvBal(i,t,s):= if(t<>1, inv(i,t-1,s), INIT_INV(i)) + (sum(u in SUP, tau in PERIODS|tau+SAMPLE_LT(i,u,t,s)=t) order(i,tau,u)) - 
+					sum(j in PRODUCE_ITEMS) REQ(i,j)*produce(j,t,s) = inv(i,t,s)						
+					
+					!Cost incurred for ORDER ITEMS
+					ExpTotCost+= SAMPLE_PROB(s)*HC(i)*inv(i,t,s)
+					ExpTotCost+= SAMPLE_PROB(s)*(sum(u in SUP) OC(i,u)*order(i,t,u))		
+					ExpTotCost+= SAMPLE_PROB(s)*(sum(u in SUP) FC(i,u)*ctrct(i,t,u))									
+				else 
+					!PRODUCE ITEMS						
+					produce(i,t,s) is_integer			
+					inv(i,t,s) is_integer			
+					
+					!Produce item (components) inventory balance
+					CompInvBal(i,t,s):= if(t<>1, inv(i,t-1,s), INIT_INV(i)) + if(t>PT(i), produce(i,t-PT(i),s), 0) - 
+					sum(j in PRODUCE_ITEMS) REQ(i,j)*produce(j,t,s) = inv(i,t,s)
+					
+					!Production capacity									
+					ProdCapa(i,t,s):= produce(i,t,s) <= PROD_CAPA(i)					
+				
+					!Cost incurred for PRODUCE ITEMS
+					ExpTotCost+= SAMPLE_PROB(s)*HC(i)*inv(i,t,s)
+					ExpTotCost+= SAMPLE_PROB(s)*PC(i)*produce(i,t,s)
+				end-if							
+			end-do !i in COMPONENTS
+		end-do !t	
+		
+		!Limits on the number of suppliers
+		forall(i in ORDER_ITEMS) do			
+			MinNumSup(i):= sum(u in SUP, t in PERIODS) ctrct(i,t,u) >= MIN_NUM_SUP(i)
+			MaxNumSup(i):= sum(u in SUP, t in PERIODS) ctrct(i,t,u) <= MAX_NUM_SUP(i)	
+		end-do		
+	end-do !s
+	
+	!Export the problem
+	!exportprob(EP_MIN, "GVC_opt_model.txt", ExpTotCost)
+	writeln(">>> Initializing optimization model Done.")	
+	
+	writeln(">> Optimize the model...")	
+	setparam("XPRS_LOADNAMES", true)
+	setparam("XPRS_VERBOSE", true)
+	setparam("XPRS_MAXTIME", -MAX_TIME)
+	setparam("XPRS_MIPRELSTOP", MIP_GAP)
+	
+	minimize(ExpTotCost)
+	
+	if (getprobstat = XPRS_OPT or getprobstat = XPRS_UNF) then
+		writeln(">>> Optimizing model Done.")	
+	else
+		writeln(">>> ERROR: Failed in Optimizing model.", getprobstat)
+		_abnormal_engine_status("OD01_EngineStatus")
+		exit(0)
+	end-if			
+	
+	writeln("Time to solve the model: ", getparam("XPRS_TIME"), " (sec)")
+	writeln("Optimal objective value: ", getobjval)
+	
+	include "GVC_opt_engine_result.mos"
+	
+	_normal_engine_status("OD01_EngineStatus") 
+end-model

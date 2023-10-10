@@ -1,0 +1,94 @@
+	
+writeln(">> Creating and writing output files....")
+	
+declarations
+	_r : array(1..20) of string
+	CtrCost, OrderCost, InvCost, BacklogCost, TotCost: real
+end-declarations
+
+!! Writing OD02_SupplyPlan.csv
+_openfileforwrite("OD02_SupplyPlan") 
+forall(t in PERIODS, u in SUP, i in ORDER_ITEMS) do
+	_r(1) := string(t)
+	_r(2) := u
+	_r(3) := i
+	_r(4) := string(getsol(order(i,t,u)))
+	_r(5) := if(getsol(avail(i,t,u)) > TLNC, "Y", "N")
+	_writeline([_r(1),_r(2),_r(3),_r(4),_r(5)],5)
+end-do
+_closefileforwrite
+
+!! Writing OD03_AssemblyPlan.csv
+_openfileforwrite("OD03_AssemblyPlan") 
+forall(s in SAMPLE_SCENARIOS, t in PERIODS, i in ITEMS, j in ITEMS | exists(REQ(i,j)) and getsol(produce(j,t,s)) > TLNC) do
+	_r(1) := string(s)
+	_r(2) := string(t)	
+	_r(3) := i
+	_r(4) := string(REQ(i,j)*getsol(produce(j,t,s)))
+	_r(5) := j
+	_r(6) := string(getsol(produce(j,t,s)))
+	_r(7) := if(j in END_ITEMS, "Y", "N")
+	_writeline([_r(1),_r(2),_r(3),_r(4),_r(5),_r(6),_r(7)],7)
+end-do
+_closefileforwrite
+
+
+!! Writing OD04_BacklogPlan.csv
+_openfileforwrite("OD04_BacklogPlan") 
+forall(s in SAMPLE_SCENARIOS, t in PERIODS, i in END_ITEMS | getsol(backlog(i,t,s)) > TLNC) do
+	_r(1) := string(s)
+	_r(2) := string(t)	
+	_r(3) := i
+	_r(4) := string(getsol(backlog(i,t,s)))
+	_writeline([_r(1),_r(2),_r(3),_r(4)],4)
+end-do
+_closefileforwrite
+
+!! Writing OD05_InventoryPlan.csv
+_openfileforwrite("OD05_InventoryPlan") 
+forall(s in SAMPLE_SCENARIOS, t in PERIODS, i in ITEMS | getsol(inv(i,t,s)) > TLNC) do
+	_r(1) := string(s)
+	_r(2) := string(t)	
+	_r(3) := i
+	_r(4) := string(getsol(inv(i,t,s)))
+	_r(5) := string(HC(i)*getsol(inv(i,t,s)))
+	_writeline([_r(1),_r(2),_r(3),_r(4),_r(5)],5)
+end-do
+_closefileforwrite
+
+!! Writing OD06_Scenario.csv
+_openfileforwrite("OD06_Scenario") 
+forall(s in SAMPLE_SCENARIOS, t in PERIODS, i in ORDER_ITEMS, u in SUP) do
+	_r(1) := string(s)
+	_r(2) := string(t)	
+	_r(3) := u
+	_r(4) := i
+	_r(5) := string(SAMPLE_LT(i,u,t,s))
+	_r(6) := string(SAMPLE_PROB(s))
+	_writeline([_r(1),_r(2),_r(3),_r(4),_r(5),_r(6)],6)
+end-do
+_closefileforwrite
+
+!! Writing OD07_TotalCost.csv
+_openfileforwrite("OD07_TotalCost") 
+forall(s in SAMPLE_SCENARIOS, t in PERIODS) do
+	_r(1) := string(s)
+	_r(2) := string(t)	
+	
+	!Cost Calculation
+	CtrCost:= sum(i in ORDER_ITEMS, u in SUP) FC(i,u)*getsol(ctrct(i,t,u))
+	OrderCost:= sum(i in ORDER_ITEMS, u in SUP) OC(i,u)*getsol(order(i,t,u))
+	InvCost:= sum(i in ITEMS) HC(i)*getsol(inv(i,t,s))
+	BacklogCost:= sum(i in END_ITEMS) if(t<>HORIZON, BC(i), EC(i))*getsol(backlog(i,t,s))
+	TotCost:= CtrCost + OrderCost + InvCost + BacklogCost
+	
+	_r(3) := string(CtrCost)	!Contract Cost
+	_r(4) := string(OrderCost)	!Ordering Cost
+	_r(5) := string(InvCost)	!Inventory Cost
+	_r(6) := string(BacklogCost)!Backlog Cost (Lost sales cost for the last period)
+	_r(7) := string(TotCost)	!Total Cost (Sum of all four types of cost above)
+	_writeline([_r(1),_r(2),_r(3),_r(4),_r(5),_r(6),_r(7)],7)
+end-do
+_closefileforwrite
+
+writeln(">>> Output files successfully created.")

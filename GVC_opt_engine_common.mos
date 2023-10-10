@@ -1,0 +1,160 @@
+
+! Common functions for Reading and Writing files
+
+declarations
+	! This will containing contants of data file
+	! ex) data("SD1", 2,1) means first field at line 2 of file "SD1"
+	_Data : array(string, integer, integer) of string
+	! The number of lines of data file will be stored to this
+	_Line : array(string) of integer
+	! The number of fields 
+	_Columns : integer
+	! True if the file is already read
+	_Read : array(string) of boolean
+	INPUT_DELIM = ","
+	OUTPUT_DELIM = "," 	
+	_txt: text
+	_has_next: boolean	
+	FILE_PREFIX = ""
+	IN_FILE_EXT = ".csv"
+	OUT_FILE_EXT = ".csv"
+end-declarations
+
+! Declarations of temporary variables for reading data files
+declarations
+	_filename : string
+	_line : integer
+	_value : array(1..30) of string
+	_temp_int : integer
+	_temp_real : real
+	_temp_string : string
+end-declarations
+
+setparam("ioctrl", true)
+
+! Read a data file 
+! File contents will be stored to _data
+procedure readfile(mFilename : string)
+	declarations
+		_s : array(1..30) of string
+		_line : integer		
+	end-declarations
+	
+	fopen(PLAN_DIR + "/" + mFilename + IN_FILE_EXT, F_INPUT)
+	setparam("sys_sepchar",getchar(INPUT_DELIM,1))     ! field separator
+	
+	if getparam("iostatus") = 0 then
+		repeat
+			if readtextline(_txt)>0 then
+				_line := _line + 1
+				trim(_txt,SYS_RIGHT)						! remove end of line character
+				setparam("sys_endparse",0)					! start parsing
+				
+				repeat
+					_has_next := nextfield(_txt)                       ! jump to first field			
+					if _has_next then
+						_Columns += 1
+						_Data(mFilename, _line, _Columns) := string(parsetext(_txt))	
+					else
+						break
+					end-if
+				until false
+				_Columns := 0
+			else
+				break		
+			end-if				
+		until false
+		_Line(mFilename) := _line
+	else
+		_Line(mFilename) := 0
+		_Columns := 0
+	end-if
+	fclose(F_INPUT)
+end-procedure
+
+! Give specified data
+! If the file is not yet loaded, read the file first
+function getdata(mFilename : string, mRow : integer, mColumn : integer) : string
+	if _Read(mFilename) = false then
+		readfile(mFilename)
+		_Read(mFilename) := true
+	end-if
+	returned := _Data(mFilename, mRow, mColumn) - INPUT_DELIM
+end-function
+
+! Give number of lines of file
+! If the file is not yet loaded, read the file first
+function getdataline(mFilename : string) : integer
+	if _Read(mFilename) = false then
+		readfile(mFilename)
+		_Read(mFilename) := true
+	end-if
+	returned := _Line(mFilename)
+end-function
+
+function getdatacolumns(mFilename : string) : integer
+	if _Read(mFilename) = false then
+		readfile(mFilename)
+		_Read(mFilename) := true
+	end-if
+	returned := _Columns
+end-function
+	
+! check if the file is already read
+function isread(mFilename: string) : boolean
+	returned := _Read(mFilename)
+end-function
+
+! set the file to be read
+procedure setreadon(mFilename: string)
+	_Read(mFilename) := true
+end-procedure
+
+! open text file to write
+procedure _openfileforwrite(mFilename : string)
+	fopen(OUTPUT_DIR + "/" + mFilename + OUT_FILE_EXT, F_OUTPUT)
+end-procedure
+
+! write a line to an open out file
+procedure _writeline(mFields : list of string, num : integer)
+	declarations
+		j : integer
+	end-declarations
+	
+	j := 0
+	forall (i in mFields) do
+		write(i)
+		j += 1
+		if (j = num) then
+			writeln
+		else
+			write(OUTPUT_DELIM)
+		end-if
+	end-do
+end-procedure
+
+! close the open file for writing 
+procedure _closefileforwrite
+	fclose(F_OUTPUT)
+end-procedure
+
+! initial engine status file stamp
+procedure _init_engine_status(mFilename : string)
+	_openfileforwrite(mFilename) ! open file for writing
+	_writeline(['N','N'],2) ! write one line to indicate the engine under progress
+	_closefileforwrite ! close the file
+end-procedure
+
+! abnormal termination of the engine
+procedure _abnormal_engine_status(mFilename : string)
+	_openfileforwrite(mFilename) ! open file for writing
+	_writeline(['Y','N'],2) ! write one line to indicate the engine abnormally stopped
+	_closefileforwrite ! close the file
+end-procedure
+
+! normal termination of the engine
+procedure _normal_engine_status(mFilename : string)
+	_openfileforwrite(mFilename) ! open file for writing
+	_writeline(['Y','Y'],2) ! write one line to indicate the engine normally stopped
+	_closefileforwrite ! close the file
+end-procedure
